@@ -1,56 +1,56 @@
-# qgis-mcp · QGIS 矢量处理能力
+# FreeCAD 参数化建模 MCP
 
-`qgis-mcp` 接收 GeoJSON 或 GeoPackage 文件，提供格式转换、缓冲区分析、几何简化和坐标重投影四项工具。每次处理生成的文件标识可传给下一项工具，例如先把道路投影到以米为单位的坐标系，再生成道路两侧的缓冲区。
+`freecad-design` 让 MCP 客户端通过长、宽、高三个参数创建和调整长方体模型，并将同一设计导出为 PNG 预览图、可继续编辑的 FreeCAD 文档（FCStd）或用于 CAD 软件间交换的 STEP 文件。
 
 ## 客户端接入
 
 ```json
 {
   "mcpServers": {
-    "qgis-mcp": {
+    "freecad-design": {
       "type": "streamableHttp",
-      "url": "http://qgis-mcp.yuniverse-work.svc.cluster.local:8080/mcp"
+      "url": "http://freecad-mcp.yuniverse-work.svc.cluster.local:8081/mcp"
     }
   }
 }
 ```
 
-## 四项工具
+## 五个工具
 
-| 工具 | 用途 | 专用参数 |
+| 工具 | 必填参数 | 用途 |
 | --- | --- | --- |
-| `convert_vector` | 将单个矢量图层转换为 GeoJSON 或 GeoPackage，保留源坐标参考系（CRS）和属性。 | 通过公共参数 `output_format` 指定目标格式。 |
-| `buffer_vector` | 按指定距离生成缓冲区面。输入图层须使用以米为单位的投影坐标系。 | `distance_m` 必填，为大于 0 的距离，单位为米。`dissolve` 可选，默认 `false`，设为 `true` 可融合缓冲区面。 |
-| `simplify_vector` | 用 Douglas–Peucker 算法简化线或面几何。输入图层须使用以米为单位的投影坐标系。 | `tolerance_m` 必填，为大于 0 的简化容差，单位为米。 |
-| `reproject_vector` | 将图层坐标转换到指定坐标参考系。 | `target_crs` 必填，格式为 `EPSG:` 加 1 至 7 位数字，首位为 1 至 9，例如 `EPSG:4326`。 |
+| `get_rpc_status` | 无，传 `{}` | 检查 FreeCAD 的 RPC 服务是否运行、图形界面是否就绪。 |
+| `create_box` | `length`、`width`、`height` | 创建独立的长方体设计，返回供后续操作使用的 `design_id`。 |
+| `resize_box` | `design_id`、`length`、`width`、`height` | 调整已有长方体。即使只改变一个尺寸，也要传入全部三个目标尺寸。 |
+| `export_design` | `design_id`、`format` | 导出指定格式，返回有效期为 **10 分钟**的 `download_url`。 |
+| `close_design` | `design_id` | 关闭设计。已签发的下载链接在原有效期内仍可使用。 |
 
-四个工具均接受以下公共参数。
+三个尺寸均为数值，单位是**毫米**，每个值须大于 0 且不超过 100,000。导出格式参数使用小写值 `png`、`fcstd` 或 `step`。`design_id` 的格式是 `Market_` 加 24 位小写十六进制字符；调用方应私下保存服务实际返回的值。
 
-| 参数 | 类型 | 用法 |
-| --- | --- | --- |
-| `file_id` | 字符串，必填 | 上传或上一步处理返回的文件标识，由 48 个小写十六进制字符组成。 |
-| `output_format` | 字符串，必填 | 可取 `geojson` 或 `gpkg`。即使只做缓冲、简化或重投影，也需要指定结果格式。 |
-| `layer` | 字符串或 `null`，可选 | 输入图层名，默认 `null`。对多图层 GeoPackage，可传入要处理的图层名。名称长度为 1 至 256 个字符。 |
+## 示例：创建长方体、调整高度并导出
 
-## 文件上传、传递与下载
+以下 JSON 为各工具的 `arguments`。示例中的 `design_id` 为虚构值，使用时替换成第一步返回的标识。
 
-服务说明给出的文件接口与 MCP 端点位于同一主机。下列路径均从主机根路径开始。
-
-1. **上传文件。** 将 GeoJSON 原始文件字节作为请求体发往 `POST /files/geojson`，或将 GeoPackage 发往 `POST /files/gpkg`，取得 `file_id`。
-2. **调用工具。** 将 `file_id`、`output_format` 和专用参数传给对应的 MCP 工具。连续处理时，把上一步结果中的 `file_id` 作为下一步的输入。
-3. **下载结果。** 使用同一主机对结果中的 `download_path` 发起 `GET` 请求，将文件保存到工作区。服务声明临时文件在 **600 秒（10 分钟）** 后过期，需在有效期内完成后续调用或下载。
-
-### 示例：生成道路的 100 米缓冲区
-
-假设道路图层使用经纬度坐标。上传文件后，先调用 `reproject_vector`，把输入图层转到适合道路所在区域、以米为单位的投影坐标系，输出格式可选 `gpkg`。再调用 `buffer_vector`，传入重投影结果的文件标识。下面的 `file_id` 是格式示例，实际调用时请替换为服务返回值。
+**1. 创建模型。** 调用 `create_box`，创建长 80 mm、宽 50 mm、高 20 mm 的长方体。
 
 ```json
-{
-  "file_id": "0123456789abcdef0123456789abcdef0123456789abcdef",
-  "output_format": "gpkg",
-  "distance_m": 100,
-  "dissolve": true
-}
+{ "length": 80, "width": 50, "height": 20 }
 ```
 
-这组参数会按 100 米距离建立缓冲区，并融合缓冲区面。如果目的是仅减少道路线条的顶点数，可对米制投影后的道路调用 `simplify_vector`，用 `tolerance_m` 指定简化容差。
+**2. 调整高度。** 调用 `resize_box`，把高度改为 25 mm，并传入原来的长和宽。
+
+```json
+{ "design_id": "Market_0123456789abcdef01234567", "length": 80, "width": 50, "height": 25 }
+```
+
+**3. 导出并下载。** 调用 `export_design` 导出 STEP 文件，然后从项目工作区访问返回的 `download_url`，在 10 分钟内保存文件。需要预览图时，用同一个 `design_id` 再调用一次，将 `format` 改为 `png`。
+
+```json
+{ "design_id": "Market_0123456789abcdef01234567", "format": "step" }
+```
+
+**4. 关闭设计。** 完成所需导出后调用 `close_design`。
+
+```json
+{ "design_id": "Market_0123456789abcdef01234567" }
+```
